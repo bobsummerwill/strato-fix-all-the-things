@@ -657,6 +657,7 @@ ${COMMIT_MSG}
             --title "Fix #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
             --body "$PR_BODY" \
             --label "ai-fixes-experimental" \
+            --draft \
             2>&1) || {
             PR_URL=$(gh pr view "$BRANCH_NAME" --repo "$REPO" --json url -q '.url' 2>/dev/null || echo "unknown")
         }

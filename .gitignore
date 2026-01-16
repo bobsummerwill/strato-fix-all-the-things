@@ -1,5 +1,23 @@
 # Environment variables
 .env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+eggs/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
 
 # Run logs (contain issue data, diffs, and Claude output)
 runs/

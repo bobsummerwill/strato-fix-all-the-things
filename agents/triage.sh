@@ -45,14 +45,44 @@ fi
 # Extract JSON output from Claude's response
 agent_log INFO "Extracting triage results..."
 
-# Look for JSON in the log file - Claude outputs it in the assistant messages
-TRIAGE_JSON=$(grep -a '"classification"' "$LOG_FILE" | tail -1 | grep -o '{[^}]*}' | head -1 || echo "")
+# The JSON is embedded in stream-json output. Claude outputs it in markdown code blocks.
+# We use Python for reliable JSON extraction since bash regex is fragile for nested JSON.
+TRIAGE_JSON=$(python3 -c "
+import sys
+import json
+import re
 
-# Try harder - look for the full JSON block
-if [ -z "$TRIAGE_JSON" ] || ! echo "$TRIAGE_JSON" | jq -e '.classification' &>/dev/null; then
-    # Extract from text content in stream
-    TRIAGE_JSON=$(cat "$LOG_FILE" | tr '\n' ' ' | grep -oP '\{[^{}]*"classification"[^{}]*\}' | tail -1 || echo "")
-fi
+log = open('$LOG_FILE', 'r', errors='ignore').read()
+
+# Unescape the JSON-encoded strings
+log = log.replace('\\\\n', '\n').replace('\\\\\"', '\"').replace('\\\\\\\\', '\\\\')
+
+# Find JSON blocks with classification field
+# Look for ```json ... ``` blocks first
+matches = re.findall(r'\`\`\`json\s*(\{[^$]+?\})\s*\`\`\`', log, re.DOTALL)
+
+for match in reversed(matches):  # Start from last match
+    try:
+        obj = json.loads(match)
+        if 'classification' in obj:
+            print(json.dumps(obj))
+            sys.exit(0)
+    except:
+        pass
+
+# Fallback: look for raw JSON object with classification
+matches = re.findall(r'\{[^{}]*\"classification\"[^{}]*\}', log)
+for match in reversed(matches):
+    try:
+        obj = json.loads(match)
+        if 'classification' in obj:
+            print(json.dumps(obj))
+            sys.exit(0)
+    except:
+        pass
+
+print('')
+" 2>/dev/null || echo "")
 
 if [ -z "$TRIAGE_JSON" ] || ! echo "$TRIAGE_JSON" | jq -e '.classification' &>/dev/null; then
     agent_log WARNING "Could not extract structured triage result, defaulting to NEEDS_CLARIFICATION"

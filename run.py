@@ -215,63 +215,12 @@ def handle_success(
     try:
         # Standard title format for commit and PR
         fix_title = f"Claude Fix #{issue.number}: {issue.title}"
-
-        # Commit any uncommitted changes (fix agent may or may not have committed)
-        if git.has_changes():
-            git.add(exclude_patterns=[".env", "*.env"])
-            git.commit(
-                f"{fix_title}\n\n"
-                f"Fixes #{issue.number}\n\n"
-                f"Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
-            )
-
-        # Check if there are commits to push
-        if not git.has_unpushed_commits("origin", branch_name):
-            print("[WARNING] No commits to push")
-            github.add_issue_comment(
-                issue.number,
-                f"Pipeline completed but no code changes were made.\n\n"
-                f"Aggregate confidence: {state.aggregate_confidence}"
-            )
-            return PipelineStatus.SKIPPED
-
-        # Push
-        git.push("origin", branch_name, set_upstream=True)
-        print(f"[SUCCESS] Pushed to origin/{branch_name}")
-
-        # Create PR
         confidence = state.aggregate_confidence
 
-        pr_body = f"""## Summary
-Auto-generated fix for issue #{issue.number}
-
-## Confidence
-- Aggregate: {confidence:.0%}
-- Breakdown: {json.dumps(state.confidence_breakdown, indent=2)}
-
-## Test Plan
-- [ ] Review the changes
-- [ ] Run tests
-- [ ] Verify fix addresses the issue
-
----
-Generated with [Claude Code](https://claude.com/claude-code)
-"""
-
-        pr = github.create_pr(
-            title=fix_title,
-            body=pr_body,
-            head=branch_name,
-            base=config.base_branch,
-            draft=True,
-        )
-        print(f"[SUCCESS] Created PR: {pr.url}")
-
-        # Build issue comment with fix summary
-        fix_summary = ""
-        files_changed = []
-
         # Load fix state to get details
+        files_changed = []
+        caveats = []
+        testing_notes = []
         fix_state_file = run_dir / "fix.state.json"
         if fix_state_file.exists():
             try:
@@ -281,16 +230,6 @@ Generated with [Claude Code](https://claude.com/claude-code)
                 full_result = fix_data.get("full_result", {})
                 caveats = full_result.get("caveats", [])
                 testing_notes = full_result.get("testing_notes", [])
-
-                if caveats:
-                    fix_summary += "\n**Caveats:**\n"
-                    for caveat in caveats[:3]:  # Limit to 3
-                        fix_summary += f"- {caveat}\n"
-
-                if testing_notes:
-                    fix_summary += "\n**Testing notes:**\n"
-                    for note in testing_notes[:3]:  # Limit to 3
-                        fix_summary += f"- {note}\n"
             except (json.JSONDecodeError, KeyError):
                 pass
 
@@ -309,22 +248,89 @@ Generated with [Claude Code](https://claude.com/claude-code)
             except (json.JSONDecodeError, KeyError):
                 pass
 
-        # Build the comment
-        files_list = ", ".join(f"`{f}`" for f in files_changed[:5]) if files_changed else "See PR"
+        # Build the detailed body (used for commit, PR, and issue comment)
+        files_list = ", ".join(f"`{f}`" for f in files_changed[:5]) if files_changed else "See changes"
+
+        detail_body = f"**Files changed:** {files_list}\n"
+
+        if root_cause:
+            detail_body += f"\n**Root cause:** {root_cause}\n"
+
+        if caveats:
+            detail_body += "\n**Caveats:**\n"
+            for caveat in caveats[:3]:
+                detail_body += f"- {caveat}\n"
+
+        if testing_notes:
+            detail_body += "\n**Testing notes:**\n"
+            for note in testing_notes[:3]:
+                detail_body += f"- {note}\n"
+
+        detail_body += f"\n**Confidence:** {confidence:.0%}"
+
+        # Build commit message with full details
+        commit_body = f"""{fix_title}
+
+Fixes #{issue.number}
+
+{detail_body}
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
+
+        # Commit any uncommitted changes (fix agent may or may not have committed)
+        if git.has_changes():
+            git.add(exclude_patterns=[".env", "*.env"])
+            git.commit(commit_body)
+
+        # Check if there are commits to push
+        if not git.has_unpushed_commits("origin", branch_name):
+            print("[WARNING] No commits to push")
+            github.add_issue_comment(
+                issue.number,
+                f"Pipeline completed but no code changes were made.\n\n"
+                f"Aggregate confidence: {state.aggregate_confidence}"
+            )
+            return PipelineStatus.SKIPPED
+
+        # Push
+        git.push("origin", branch_name, set_upstream=True)
+        print(f"[SUCCESS] Pushed to origin/{branch_name}")
+
+        # Build PR body with full details
+        pr_body = f"""## Summary
+
+Auto-generated fix for issue #{issue.number}
+
+{detail_body}
+
+## Confidence Breakdown
+
+{json.dumps(state.confidence_breakdown, indent=2)}
+
+## Test Plan
+
+- [ ] Review the changes
+- [ ] Run tests
+- [ ] Verify fix addresses the issue
+
+---
+*Generated by [STRATO Fix All The Things](https://github.com/strato-net/strato-fix-all-the-things)*"""
+
+        pr = github.create_pr(
+            title=fix_title,
+            body=pr_body,
+            head=branch_name,
+            base=config.base_branch,
+            draft=True,
+        )
+        print(f"[SUCCESS] Created PR: {pr.url}")
+
+        # Build issue comment
         comment = f"""🤖 **Automated Fix Created**
 
 **PR:** {pr.url}
 
-**Files changed:** {files_list}
-"""
-        if root_cause:
-            comment += f"\n**Root cause:** {root_cause}\n"
-
-        if fix_summary:
-            comment += fix_summary
-
-        comment += f"""
-**Confidence:** {confidence:.0%}
+{detail_body}
 
 Please review the PR before merging.
 

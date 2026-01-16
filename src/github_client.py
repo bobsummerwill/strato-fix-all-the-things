@@ -93,6 +93,7 @@ class GitHubClient:
             "--body", body,
             "--head", head,
             "--base", base,
+            "--label", "ai-fixes-experimental",
         ]
         if draft:
             args.append("--draft")

@@ -372,6 +372,39 @@ This is a blockchain/DeFi platform called STRATO/Mercata with multiple component
 - Smart contracts: Solidity in mercata/contracts/
 - Common patterns: Use existing utility functions, follow TypeScript conventions, prefer explicit error handling
 
+META-COGNITIVE REASONING FRAMEWORK:
+Apply this structured reasoning approach throughout your work:
+
+1. DECOMPOSE: Break the problem into sub-problems
+   - What exactly is the issue asking for?
+   - What are the distinct components involved?
+   - What dependencies exist between sub-problems?
+
+2. SOLVE: Address each sub-problem with explicit confidence (0.0-1.0)
+   - For each sub-problem, state your confidence level
+   - Document WHY you have that confidence level
+   - Low confidence areas need more investigation
+
+3. VERIFY: Check your work at each step
+   - Logic: Does the solution make sense?
+   - Facts: Are your assumptions about the codebase correct?
+   - Completeness: Have you addressed all aspects?
+   - Bias: Are you making unfounded assumptions?
+
+4. SYNTHESIZE: Combine solutions using weighted confidence
+   - Overall confidence = weighted average of sub-problem confidences
+   - Weakest link matters most for correctness
+
+5. REFLECT: If overall confidence < 0.8, identify weakness and retry
+   - What specific aspect is uncertain?
+   - What additional exploration would increase confidence?
+   - Is the issue itself unclear, or is there a knowledge gap?
+
+Your commit message MUST include:
+- Overall confidence score (0.0-1.0)
+- Breakdown of confidence by sub-problem
+- Key caveats or uncertainties
+
 PHASE 1 - DEEP CODEBASE EXPLORATION (DO THIS FIRST):
 Before making any changes, thoroughly explore and understand:
 
@@ -424,7 +457,10 @@ Create a git commit with a COMPREHENSIVE message that includes:
   - Any potential side effects or risks
   - Related code that uses similar patterns (not modified but relevant)
 - **Testing Recommendations**: What should be tested to verify this fix
-- **Confidence Level**: Rate your understanding and confidence (Low/Medium/High)
+- **Confidence Assessment**:
+  - Overall confidence score (0.0-1.0)
+  - Breakdown by: root cause identification, solution correctness, completeness, no regressions
+  - Key caveats or uncertainties
 - End with: Co-Authored-By: Claude <noreply@anthropic.com>
 
 COMMIT MESSAGE EXAMPLE FORMAT:
@@ -461,10 +497,16 @@ Testing Recommendations:
 - Test on slow network conditions to ensure polling timeout is adequate
 - Verify UI doesn't freeze during polling
 
-Confidence Level: High
-- Root cause clearly identified through code analysis
-- Solution follows existing patterns in the codebase
-- All transaction handlers updated consistently
+Confidence Assessment:
+- Overall: 0.85
+- Root cause identification: 0.95 - Clear from code flow analysis
+- Solution correctness: 0.85 - Follows existing patterns, but untested
+- Completeness: 0.80 - All handlers updated, but may miss edge cases
+- No regressions: 0.75 - Low risk, but polling could affect perceived performance
+
+Key Caveats:
+- Polling timeout (10s) is an educated guess based on similar code
+- Did not verify behavior under extreme network latency
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 

@@ -228,6 +228,11 @@ declare -a SUCCESSFUL_ISSUES=()
 declare -a FAILED_ISSUES=()
 declare -a SKIPPED_ISSUES=()
 
+# Create runs directory for logs
+RUNS_DIR="${SCRIPT_DIR}/runs"
+RUN_TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+mkdir -p "$RUNS_DIR"
+
 # ============================================================================
 # Process Each Issue
 # ============================================================================
@@ -259,6 +264,13 @@ for ISSUE_NUMBER in "${ISSUE_NUMBERS[@]}"; do
 
         log_success "Issue fetched: ${ISSUE_TITLE}"
         log_info "Labels: ${ISSUE_LABELS:-none}"
+
+        # Create run directory for this issue
+        ISSUE_RUN_DIR="${RUNS_DIR}/${RUN_TIMESTAMP}-issue-${ISSUE_NUMBER}"
+        mkdir -p "$ISSUE_RUN_DIR"
+
+        # Save issue data
+        echo "$ISSUE_JSON" > "${ISSUE_RUN_DIR}/issue.json"
 
         # Check if issue description is too vague or short
         BODY_LENGTH=$(echo "$ISSUE_BODY" | wc -c)
@@ -535,12 +547,15 @@ Work autonomously. Do not ask questions. Make your best effort."
 
         echo "----------------------------------------"
 
+        # Save prompt to run directory
+        echo "$CLAUDE_PROMPT" > "${ISSUE_RUN_DIR}/prompt.txt"
+
         set +e
         timeout 1200 claude \
             --dangerously-skip-permissions \
             --verbose \
             --output-format stream-json \
-            -p "$CLAUDE_PROMPT" 2>&1 | while IFS= read -r line; do
+            -p "$CLAUDE_PROMPT" 2>&1 | tee "${ISSUE_RUN_DIR}/claude.log" | while IFS= read -r line; do
             # Parse JSON lines and format nicely
             if echo "$line" | jq -e '.' &>/dev/null 2>&1; then
                 TYPE=$(echo "$line" | jq -r '.type // "unknown"' 2>/dev/null)
@@ -717,19 +732,57 @@ ${COMMIT_MSG}
 🤖 Generated with [Claude Code](https://claude.ai/claude-code)
 "
 
+        # Extract confidence from commit message for labeling
+        CONFIDENCE_SCORE=$(echo "$COMMIT_MSG" | grep -oP 'Overall: \K[0-9.]+' || echo "0.5")
+
+        # Determine labels based on confidence
+        PR_LABELS="ai-fixes-experimental"
+        if (( $(echo "$CONFIDENCE_SCORE < 0.7" | bc -l) )); then
+            PR_LABELS="${PR_LABELS},low-confidence"
+            log_warning "Low confidence fix (${CONFIDENCE_SCORE}), adding low-confidence label"
+        elif (( $(echo "$CONFIDENCE_SCORE >= 0.85" | bc -l) )); then
+            PR_LABELS="${PR_LABELS},high-confidence"
+            log_info "High confidence fix (${CONFIDENCE_SCORE})"
+        fi
+
         PR_URL=$(gh pr create \
             --repo "$REPO" \
             --base "$BASE_BRANCH" \
             --head "$BRANCH_NAME" \
             --title "Fix #${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
             --body "$PR_BODY" \
-            --label "ai-fixes-experimental" \
+            --label "$PR_LABELS" \
             --draft \
             2>&1) || {
             PR_URL=$(gh pr view "$BRANCH_NAME" --repo "$REPO" --json url -q '.url' 2>/dev/null || echo "unknown")
         }
 
         log_success "PR created: ${PR_URL}"
+
+        # Save diff to run directory
+        git diff "${BASE_BRANCH}..HEAD" > "${ISSUE_RUN_DIR}/changes.diff" 2>/dev/null || true
+
+        # Extract confidence from commit message and save result
+        CONFIDENCE=$(echo "$COMMIT_MSG" | grep -oP 'Overall: \K[0-9.]+' || echo "unknown")
+        cat > "${ISSUE_RUN_DIR}/result.json" <<RESULT_EOF
+{
+    "issue_number": ${ISSUE_NUMBER},
+    "status": "success",
+    "pr_url": "${PR_URL}",
+    "branch": "${BRANCH_NAME}",
+    "confidence": "${CONFIDENCE}",
+    "commits": ${COMMITS_AHEAD},
+    "timestamp": "$(date -Iseconds)"
+}
+RESULT_EOF
+
+        # Comment on the issue linking to the PR
+        gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "🤖 Auto-fix PR created: ${PR_URL}
+
+This fix was generated automatically by Claude Code. Please review before merging.
+
+---
+*Generated with [Claude Code](https://claude.ai/claude-code)*" 2>/dev/null || log_warning "Failed to comment on issue"
 
         # Return to base branch for next iteration
         git checkout "$BASE_BRANCH" --quiet

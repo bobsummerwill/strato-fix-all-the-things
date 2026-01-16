@@ -1,6 +1,9 @@
 # Environment variables
 .env
 
+# Run logs (contain issue data, diffs, and Claude output)
+runs/
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -22,6 +22,9 @@ ENV/
 # Run logs (contain issue data, diffs, and Claude output)
 runs/
 
+# Tool-managed clone
+.tool-clone/
+
 # OS files
 .DS_Store
 Thumbs.db

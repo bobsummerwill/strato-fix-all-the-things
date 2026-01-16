@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ def run_claude(
     cwd: Path,
     timeout_sec: int = 600,
     log_file: Path | None = None,
+    retries: int = 2,
+    retry_backoff_sec: float = 1.0,
 ) -> ClaudeResult:
     """Run Claude CLI with a prompt and return the result."""
     cmd = [
@@ -44,44 +47,75 @@ def run_claude(
         prompt,
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_sec,
-        )
+    attempt = 0
+    last_error = ""
+    while attempt <= retries:
+        attempt += 1
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+            )
 
-        output = result.stdout
-        if log_file:
-            log_file.write_text(output)
+            output = result.stdout
+            if log_file:
+                log_file.write_text(output)
 
-        # Parse the final result message
-        duration_ms = 0
-        cost_usd = 0.0
+            # Parse the final result message
+            duration_ms = 0
+            cost_usd = 0.0
 
-        for line in output.split("\n"):
-            if not line.strip():
+            for line in output.split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    msg = json.loads(line)
+                    if msg.get("type") == "result":
+                        duration_ms = msg.get("duration_ms", 0)
+                        cost_usd = msg.get("total_cost_usd", 0.0)
+                except json.JSONDecodeError:
+                    continue
+
+            if result.returncode == 0:
+                return ClaudeResult(
+                    success=True,
+                    output=output,
+                    duration_ms=duration_ms,
+                    cost_usd=cost_usd,
+                    error="",
+                )
+
+            last_error = result.stderr or "Claude CLI failed"
+            if attempt <= retries:
+                time.sleep(retry_backoff_sec * attempt)
                 continue
-            try:
-                msg = json.loads(line)
-                if msg.get("type") == "result":
-                    duration_ms = msg.get("duration_ms", 0)
-                    cost_usd = msg.get("total_cost_usd", 0.0)
-            except json.JSONDecodeError:
+            return ClaudeResult(
+                success=False,
+                output=output,
+                duration_ms=duration_ms,
+                cost_usd=cost_usd,
+                error=last_error,
+            )
+
+        except subprocess.TimeoutExpired:
+            last_error = f"Claude timed out after {timeout_sec}s"
+            if attempt <= retries:
+                time.sleep(retry_backoff_sec * attempt)
                 continue
+            raise ClaudeTimeoutError(last_error)
 
-        return ClaudeResult(
-            success=result.returncode == 0,
-            output=output,
-            duration_ms=duration_ms,
-            cost_usd=cost_usd,
-            error=result.stderr if result.returncode != 0 else "",
-        )
 
-    except subprocess.TimeoutExpired:
-        raise ClaudeTimeoutError(f"Claude timed out after {timeout_sec}s")
+def _contains_required_field(value: Any, required_field: str) -> bool:
+    if isinstance(value, dict):
+        if required_field in value:
+            return True
+        return any(_contains_required_field(v, required_field) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_required_field(v, required_field) for v in value)
+    return False
 
 
 def extract_json_from_output(output: str, required_field: str = "classification") -> dict[str, Any] | None:
@@ -110,7 +144,7 @@ def extract_json_from_output(output: str, required_field: str = "classification"
         for match in reversed(matches):
             try:
                 obj = json.loads(match)
-                if required_field in obj:
+                if _contains_required_field(obj, required_field):
                     return obj
             except json.JSONDecodeError:
                 continue
@@ -123,18 +157,18 @@ def extract_json_from_output(output: str, required_field: str = "classification"
     for match in reversed(matches):
         try:
             obj = json.loads(match)
-            if required_field in obj:
+            if _contains_required_field(obj, required_field):
                 return obj
         except json.JSONDecodeError:
             continue
 
     # Last fallback: look for raw JSON with required field
-    pattern = rf'\{{[^{{}}]*"{required_field}"[^{{}}]*\}}'
+    pattern = r"\{.*\}"
     matches = re.findall(pattern, text)
     for match in reversed(matches):
         try:
             obj = json.loads(match)
-            if required_field in obj:
+            if _contains_required_field(obj, required_field):
                 return obj
         except json.JSONDecodeError:
             continue

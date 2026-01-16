@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 
 from .models import Issue
@@ -26,12 +27,28 @@ class GitHubClient:
     def __init__(self, repo: str):
         self.repo = repo
 
-    def _run_gh(self, *args: str, check: bool = True) -> str:
+    def _run_gh(self, *args: str, check: bool = True, retries: int = 2) -> str:
         """Run gh command and return output."""
         cmd = ["gh", *args, "-R", self.repo]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if check and result.returncode != 0:
-            raise GitHubError(f"gh command failed: {result.stderr}")
+        attempt = 0
+        last_error = ""
+        while attempt <= retries:
+            attempt += 1
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+            last_error = result.stderr.strip()
+            if not check or attempt > retries:
+                break
+            retryable = any(
+                token in last_error.lower()
+                for token in ("rate limit", "timeout", "temporarily", "503", "502", "network")
+            )
+            if not retryable:
+                break
+            time.sleep(attempt)
+        if check and last_error:
+            raise GitHubError(f"gh command failed: {last_error}")
         return result.stdout.strip()
 
     def get_issue(self, issue_number: int) -> Issue:

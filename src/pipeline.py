@@ -167,8 +167,11 @@ class Pipeline:
                     self.state.status = PipelineStatus.BLOCKED
                     self.state.failure_reason = f"Review blocked: {verdict}"
                     return "stop"
-                # REQUEST_CHANGES - need to revise
-                return "revise"
+                if verdict == "REQUEST_CHANGES":
+                    return "revise"
+                self.state.status = PipelineStatus.BLOCKED
+                self.state.failure_reason = f"Review did not approve: {verdict}"
+                return "stop"
 
             return "continue"
 
@@ -386,6 +389,12 @@ class Pipeline:
                 concerns.append(
                     f"Reported files not found in git diff: {', '.join(missing[:5])}"
                 )
+        if fix_state and changed_files:
+            fix_state.data["verified_files_changed"] = changed_files
+            fix_state.data["files_changed"] = changed_files
+            fix_state_file = self.run_dir / "fix.state.json"
+            with open(fix_state_file, "w") as f:
+                json.dump(fix_state.to_dict(), f, indent=2)
 
         if not concerns:
             return "continue"

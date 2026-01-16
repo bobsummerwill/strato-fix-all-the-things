@@ -14,6 +14,7 @@ Environment:
 """
 
 import argparse
+import fcntl
 import json
 import subprocess
 import sys
@@ -50,6 +51,14 @@ def ensure_tool_clone(config: Config) -> Path:
     return tool_dir
 
 
+def acquire_work_lock(work_dir: Path):
+    """Acquire an exclusive lock for the shared tool clone."""
+    lock_path = work_dir / ".strato.lock"
+    lock_file = open(lock_path, "a")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    return lock_file
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Auto-fix GitHub issues using AI agents")
@@ -82,52 +91,56 @@ def main() -> int:
     print(f"[INFO] Work repo: {config.work_dir}")
     print(f"[INFO] Issues to process: {len(args.issues)}")
 
-    # Initialize clients
-    github = GitHubClient(config.github_repo)
-    git = GitOps(config.work_dir)
+    lock_handle = acquire_work_lock(config.work_dir)
+    try:
+        # Initialize clients
+        github = GitHubClient(config.github_repo)
+        git = GitOps(config.work_dir)
 
-    # Ensure runs directory exists
-    config.runs_dir.mkdir(exist_ok=True)
+        # Ensure runs directory exists
+        config.runs_dir.mkdir(exist_ok=True)
 
-    # Track results
-    results = {"success": [], "failed": [], "skipped": []}
+        # Track results
+        results = {"success": [], "failed": [], "skipped": []}
 
-    for i, issue_num in enumerate(args.issues, 1):
+        for i, issue_num in enumerate(args.issues, 1):
+            print()
+            print("=" * 50)
+            print(f"  Issue #{issue_num} ({i}/{len(args.issues)})")
+            print("=" * 50)
+
+            try:
+                result = process_issue(config, github, git, issue_num)
+                if result == PipelineStatus.SUCCESS:
+                    results["success"].append(issue_num)
+                elif result == PipelineStatus.SKIPPED:
+                    results["skipped"].append(issue_num)
+                else:
+                    results["failed"].append(issue_num)
+            except Exception as e:
+                print(f"[ERROR] Unexpected error processing #{issue_num}: {e}")
+                results["failed"].append(issue_num)
+
+        # Print summary
         print()
         print("=" * 50)
-        print(f"  Issue #{issue_num} ({i}/{len(args.issues)})")
+        print("  Summary")
         print("=" * 50)
 
-        try:
-            result = process_issue(config, github, git, issue_num)
-            if result == PipelineStatus.SUCCESS:
-                results["success"].append(issue_num)
-            elif result == PipelineStatus.SKIPPED:
-                results["skipped"].append(issue_num)
-            else:
-                results["failed"].append(issue_num)
-        except Exception as e:
-            print(f"[ERROR] Unexpected error processing #{issue_num}: {e}")
-            results["failed"].append(issue_num)
+        if results["success"]:
+            print(f"[SUCCESS] Completed ({len(results['success'])}): {', '.join(map(str, results['success']))}")
+        if results["skipped"]:
+            print(f"[WARNING] Skipped ({len(results['skipped'])}): {', '.join(map(str, results['skipped']))}")
+        if results["failed"]:
+            print(f"[ERROR] Failed ({len(results['failed'])}): {', '.join(map(str, results['failed']))}")
 
-    # Print summary
-    print()
-    print("=" * 50)
-    print("  Summary")
-    print("=" * 50)
+        print()
+        print(f"[INFO] Total: {len(args.issues)} issues processed")
+        print(f"[INFO] Run logs: {config.runs_dir}")
 
-    if results["success"]:
-        print(f"[SUCCESS] Completed ({len(results['success'])}): {', '.join(map(str, results['success']))}")
-    if results["skipped"]:
-        print(f"[WARNING] Skipped ({len(results['skipped'])}): {', '.join(map(str, results['skipped']))}")
-    if results["failed"]:
-        print(f"[ERROR] Failed ({len(results['failed'])}): {', '.join(map(str, results['failed']))}")
-
-    print()
-    print(f"[INFO] Total: {len(args.issues)} issues processed")
-    print(f"[INFO] Run logs: {config.runs_dir}")
-
-    return 0 if not results["failed"] else 1
+        return 0 if not results["failed"] else 1
+    finally:
+        lock_handle.close()
 
 
 def cleanup_git_state(git: GitOps, base_branch: str, feature_branch: str) -> None:

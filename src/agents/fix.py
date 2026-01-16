@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+from ..claude_runner import ClaudeTimeoutError, extract_json_from_output
 from ..models import AgentStatus
 from .base import Agent
 
@@ -50,11 +50,10 @@ Full research:
         # Run Claude
         self.info(f"Running Claude (timeout: {self.context.config.fix_timeout}s)...")
         try:
-            result = run_claude(
+            result, data = self.run_claude_with_json(
                 prompt=prompt,
-                cwd=self.context.config.work_dir,
+                required_field="fix_applied",
                 timeout_sec=self.context.config.fix_timeout,
-                log_file=self.log_file,
             )
         except ClaudeTimeoutError as e:
             self.error(str(e))
@@ -66,7 +65,6 @@ Full research:
 
         # Extract JSON output - try multiple possible field names
         self.info("Extracting fix results...")
-        data = extract_json_from_output(result.output, "fix_applied")
         if not data:
             data = extract_json_from_output(result.output, "files_modified")
         if not data:

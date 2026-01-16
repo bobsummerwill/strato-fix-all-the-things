@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+from ..claude_runner import ClaudeTimeoutError
 from ..models import AgentStatus, Classification
 from .base import Agent
 
@@ -23,11 +23,10 @@ class TriageAgent(Agent):
         # Run Claude
         self.info(f"Running Claude (timeout: {self.context.config.triage_timeout}s)...")
         try:
-            result = run_claude(
+            result, data = self.run_claude_with_json(
                 prompt=prompt,
-                cwd=self.context.config.work_dir,
+                required_field="classification",
                 timeout_sec=self.context.config.triage_timeout,
-                log_file=self.log_file,
             )
         except ClaudeTimeoutError as e:
             self.error(str(e))
@@ -39,7 +38,6 @@ class TriageAgent(Agent):
 
         # Extract JSON output
         self.info("Extracting triage results...")
-        data = extract_json_from_output(result.output, "classification")
 
         if not data:
             self.error("Could not extract structured result")

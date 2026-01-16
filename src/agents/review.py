@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+from ..claude_runner import ClaudeTimeoutError
 from ..models import AgentStatus
 from .base import Agent
 
@@ -46,11 +46,10 @@ Full fix details:
         # Run Claude
         self.info(f"Running Claude (timeout: {self.context.config.review_timeout}s)...")
         try:
-            result = run_claude(
+            result, data = self.run_claude_with_json(
                 prompt=prompt,
-                cwd=self.context.config.work_dir,
+                required_field="verdict",
                 timeout_sec=self.context.config.review_timeout,
-                log_file=self.log_file,
             )
         except ClaudeTimeoutError as e:
             self.error(str(e))
@@ -62,7 +61,6 @@ Full fix details:
 
         # Extract JSON output
         self.info("Extracting review results...")
-        data = extract_json_from_output(result.output, "verdict")
 
         if not data:
             self.error("Could not extract structured result")

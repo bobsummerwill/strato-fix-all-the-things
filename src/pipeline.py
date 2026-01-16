@@ -297,10 +297,43 @@ class Pipeline:
             data = extract_json_from_output(result.output, "files_modified")
 
         if not data:
-            self.log("[ERROR] Could not extract structured result from revision")
-            self.state.status = PipelineStatus.FAILED
-            self.state.failure_reason = "Revision output missing required JSON"
-            return "stop"
+            self.log("[WARNING] Could not extract structured result from revision, retrying...")
+            retry_prompt = (
+                prompt
+                + "\n\nIMPORTANT: Return only a single valid JSON object in a ```json``` block. "
+                + "It must include the field `fix_applied`."
+            )
+            retry_prompt_path = self.run_dir / f"fix-revision-{self.fix_iteration}.retry.prompt.md"
+            retry_prompt_path.write_text(retry_prompt)
+            retry_log_file = self.run_dir / f"fix-revision-{self.fix_iteration}.retry.log"
+
+            try:
+                retry_result = run_claude(
+                    prompt=retry_prompt,
+                    cwd=self.config.work_dir,
+                    timeout_sec=self.config.fix_timeout,
+                    log_file=retry_log_file,
+                )
+            except ClaudeTimeoutError as e:
+                self.log(f"[ERROR] {e}")
+                self.state.status = PipelineStatus.FAILED
+                self.state.failure_reason = str(e)
+                return "stop"
+
+            if not retry_result.success:
+                self.log(f"[ERROR] Claude failed: {retry_result.error}")
+                self.state.status = PipelineStatus.FAILED
+                self.state.failure_reason = retry_result.error or "Claude failed"
+                return "stop"
+
+            data = extract_json_from_output(retry_result.output, "fix_applied")
+            if not data:
+                data = extract_json_from_output(retry_result.output, "files_modified")
+            if not data:
+                self.log("[ERROR] Could not extract structured result from revision")
+                self.state.status = PipelineStatus.FAILED
+                self.state.failure_reason = "Revision output missing required JSON"
+                return "stop"
 
         # Handle confidence
         conf_data = data.get("confidence", 0.5)

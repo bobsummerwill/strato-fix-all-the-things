@@ -102,6 +102,7 @@ Environment variables in `.env`:
 | `PROJECT_DIR` | Path to local repo clone | Required |
 | `TOOL_CLONE_DIR` | Path to tool-managed clone | `.tool-clone` |
 | `BASE_BRANCH` | Base branch for PRs | `develop` |
+| `STRATO_LOCK_TIMEOUT_SEC` | Max seconds to wait for the shared clone lock (0 = wait forever) | `0` |
 | `TRIAGE_TIMEOUT` | Triage agent timeout (seconds) | `120` |
 | `RESEARCH_TIMEOUT` | Research agent timeout (seconds) | `300` |
 | `FIX_TIMEOUT` | Fix agent timeout (seconds) | `300` |

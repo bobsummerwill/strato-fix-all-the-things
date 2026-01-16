@@ -16,8 +16,10 @@ Environment:
 import argparse
 import fcntl
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -54,8 +56,33 @@ def ensure_tool_clone(config: Config) -> Path:
 def acquire_work_lock(work_dir: Path):
     """Acquire an exclusive lock for the shared tool clone."""
     lock_path = work_dir / ".strato.lock"
-    lock_file = open(lock_path, "a")
-    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    lock_file = open(lock_path, "a+")
+    timeout_sec = int(os.environ.get("STRATO_LOCK_TIMEOUT_SEC", "0"))
+    start = time.monotonic()
+
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if timeout_sec and (time.monotonic() - start) >= timeout_sec:
+                lock_file.close()
+                raise RuntimeError("Timed out waiting for shared clone lock")
+            time.sleep(1)
+
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "acquired_at": datetime.utcnow().isoformat() + "Z",
+                "work_dir": str(work_dir),
+            }
+        )
+        + "\n"
+    )
+    lock_file.flush()
     return lock_file
 
 

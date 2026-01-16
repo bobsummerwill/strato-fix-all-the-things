@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+from ..claude_runner import ClaudeTimeoutError
 from ..models import AgentStatus
 from .base import Agent
 
@@ -45,11 +45,10 @@ Full analysis:
         # Run Claude
         self.info(f"Running Claude (timeout: {self.context.config.research_timeout}s)...")
         try:
-            result = run_claude(
+            result, data = self.run_claude_with_json(
                 prompt=prompt,
-                cwd=self.context.config.work_dir,
+                required_field="confidence",
                 timeout_sec=self.context.config.research_timeout,
-                log_file=self.log_file,
             )
         except ClaudeTimeoutError as e:
             self.error(str(e))
@@ -61,7 +60,6 @@ Full analysis:
 
         # Extract JSON output
         self.info("Extracting research results...")
-        data = extract_json_from_output(result.output, "confidence")
 
         if not data:
             self.error("Could not extract structured result")

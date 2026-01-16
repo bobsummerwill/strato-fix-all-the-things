@@ -97,6 +97,51 @@ class Agent(ABC):
 
         return template
 
+    def run_claude_with_json(
+        self,
+        prompt: str,
+        required_field: str,
+        timeout_sec: int,
+    ):
+        """Run Claude and extract JSON, retrying once with a stricter prompt."""
+        from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+
+        result = run_claude(
+            prompt=prompt,
+            cwd=self.context.config.work_dir,
+            timeout_sec=timeout_sec,
+            log_file=self.log_file,
+        )
+        if not result.success:
+            return result, None
+        data = extract_json_from_output(result.output, required_field)
+        if data:
+            return result, data
+
+        retry_prompt = (
+            prompt
+            + "\n\nIMPORTANT: Return only a single valid JSON object in a ```json``` block. "
+            + f"It must include the field `{required_field}`."
+        )
+        retry_prompt_file = self.context.run_dir / f"{self.name}.retry.prompt.md"
+        retry_prompt_file.write_text(retry_prompt)
+        retry_log_file = self.context.run_dir / f"{self.name}.retry.log"
+
+        try:
+            retry_result = run_claude(
+                prompt=retry_prompt,
+                cwd=self.context.config.work_dir,
+                timeout_sec=timeout_sec,
+                log_file=retry_log_file,
+            )
+        except ClaudeTimeoutError:
+            raise
+
+        if not retry_result.success:
+            return retry_result, None
+        data = extract_json_from_output(retry_result.output, required_field)
+        return retry_result, data
+
     @abstractmethod
     def run(self) -> tuple[AgentStatus, dict[str, Any]]:
         """Execute the agent's task.

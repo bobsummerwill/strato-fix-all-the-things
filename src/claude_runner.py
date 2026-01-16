@@ -118,6 +118,23 @@ def _contains_required_field(value: Any, required_field: str) -> bool:
     return False
 
 
+def _scan_for_json(text: str, required_field: str, max_len: int = 100000) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    text_len = len(text)
+    for idx, ch in enumerate(text):
+        if ch not in "{[":
+            continue
+        end_limit = min(text_len, idx + max_len)
+        snippet = text[idx:end_limit]
+        try:
+            obj, _ = decoder.raw_decode(snippet)
+        except json.JSONDecodeError:
+            continue
+        if _contains_required_field(obj, required_field):
+            return obj
+    return None
+
+
 def extract_json_from_output(output: str, required_field: str = "classification") -> dict[str, Any] | None:
     """Extract JSON from Claude's stream-json output.
 
@@ -163,14 +180,8 @@ def extract_json_from_output(output: str, required_field: str = "classification"
             continue
 
     # Last fallback: look for raw JSON with required field
-    pattern = r"\{.*\}"
-    matches = re.findall(pattern, text)
-    for match in reversed(matches):
-        try:
-            obj = json.loads(match)
-            if _contains_required_field(obj, required_field):
-                return obj
-        except json.JSONDecodeError:
-            continue
+    obj = _scan_for_json(text, required_field)
+    if obj:
+        return obj
 
     return None

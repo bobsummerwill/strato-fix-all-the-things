@@ -213,11 +213,14 @@ def handle_success(
     print(f"[INFO] Pipeline succeeded, creating PR...")
 
     try:
+        # Standard title format for commit and PR
+        fix_title = f"Claude Fix #{issue.number}: {issue.title}"
+
         # Commit any uncommitted changes (fix agent may or may not have committed)
         if git.has_changes():
             git.add(exclude_patterns=[".env", "*.env"])
             git.commit(
-                f"fix: {issue.title}\n\n"
+                f"{fix_title}\n\n"
                 f"Fixes #{issue.number}\n\n"
                 f"Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
             )
@@ -256,7 +259,7 @@ Generated with [Claude Code](https://claude.com/claude-code)
 """
 
         pr = github.create_pr(
-            title=f"fix: {issue.title}",
+            title=fix_title,
             body=pr_body,
             head=branch_name,
             base=config.base_branch,

@@ -73,6 +73,21 @@ class Pipeline:
             if result == "stop":
                 return self._finalize()
 
+            # Verify changes and tests before review
+            verify_result = self._verify_fix()
+            if verify_result == "revise":
+                if self.fix_iteration < MAX_FIX_REVIEW_ITERATIONS:
+                    self.log("[INFO] Verification requested changes, attempting revision...")
+                    continue
+                self.log("[ERROR] Verification failed but max iterations reached")
+                self.state.status = PipelineStatus.BLOCKED
+                self.state.failure_reason = (
+                    f"Verification still failing after {MAX_FIX_REVIEW_ITERATIONS} iterations"
+                )
+                return self._finalize()
+            elif verify_result == "stop":
+                return self._finalize()
+
             # Run review agent
             result = self._run_review_agent()
             if result == "approved":
@@ -257,7 +272,7 @@ class Pipeline:
         try:
             result = run_claude(
                 prompt=prompt,
-                cwd=self.config.project_dir,
+                cwd=self.config.work_dir,
                 timeout_sec=self.config.fix_timeout,
                 log_file=log_file,
             )
@@ -279,8 +294,10 @@ class Pipeline:
             data = extract_json_from_output(result.output, "files_modified")
 
         if not data:
-            self.log("[WARNING] Could not extract structured result from revision")
-            data = {"confidence": 0.5, "files_changed": []}
+            self.log("[ERROR] Could not extract structured result from revision")
+            self.state.status = PipelineStatus.FAILED
+            self.state.failure_reason = "Revision output missing required JSON"
+            return "stop"
 
         # Handle confidence
         conf_data = data.get("confidence", 0.5)
@@ -311,6 +328,9 @@ class Pipeline:
         state_file = self.run_dir / f"fix-revision-{self.fix_iteration}.state.json"
         with open(state_file, "w") as f:
             json.dump(self.agent_states["fix"].to_dict(), f, indent=2)
+        fix_state_file = self.run_dir / "fix.state.json"
+        with open(fix_state_file, "w") as f:
+            json.dump(self.agent_states["fix"].to_dict(), f, indent=2)
 
         if not files_changed and not data.get("fix_applied", True):
             self.log("[WARNING] Revision could not address feedback")
@@ -326,12 +346,108 @@ class Pipeline:
         """Run review agent."""
         return self._run_agent(ReviewAgent)
 
+    def _get_changed_files(self) -> list[str]:
+        """Get list of changed files."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD"],
+                cwd=self.config.work_dir,
+                capture_output=True,
+                text=True,
+            )
+            files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            if not files:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", f"origin/{self.config.base_branch}"],
+                    cwd=self.config.work_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            return files
+        except Exception:
+            return []
+
+    def _verify_fix(self) -> str:
+        """Verify that changes exist and optional tests pass."""
+        concerns: list[str] = []
+        suggestions: list[str] = []
+
+        changed_files = self._get_changed_files()
+        if not changed_files:
+            concerns.append("No git diff detected after fix; no files changed.")
+            suggestions.append("Ensure the fix applies actual code changes before responding.")
+
+        fix_state = self.agent_states.get("fix")
+        reported_files = fix_state.data.get("files_changed", []) if fix_state else []
+        if reported_files and changed_files:
+            missing = sorted(set(reported_files) - set(changed_files))
+            if missing:
+                concerns.append(
+                    f"Reported files not found in git diff: {', '.join(missing[:5])}"
+                )
+
+        test_command = self.config.test_command
+        if test_command:
+            log_file = self.run_dir / f"verification-iteration-{self.fix_iteration}.log"
+            self.log(f"Running verification tests: {test_command}")
+            result = subprocess.run(
+                test_command,
+                cwd=self.config.work_dir,
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+            log_file.write_text(result.stdout + "\n" + result.stderr)
+            if result.returncode != 0:
+                concerns.append(f"Test command failed with exit code {result.returncode}.")
+                suggestions.append("Address failing tests before requesting review.")
+
+        if not concerns:
+            return "continue"
+
+        verification_state = AgentState(
+            agent="verification",
+            status=AgentStatus.SKIPPED,
+            issue_number=self.issue.number,
+            confidence=0.0,
+            data={
+                "concerns": concerns,
+                "suggestions": suggestions,
+                "changed_files": changed_files,
+            },
+        )
+        self.agent_states["verification"] = verification_state
+        state_file = self.run_dir / "verification.state.json"
+        with open(state_file, "w") as f:
+            json.dump(verification_state.to_dict(), f, indent=2)
+
+        self.agent_states["review"] = AgentState(
+            agent="review",
+            status=AgentStatus.SKIPPED,
+            issue_number=self.issue.number,
+            confidence=0.0,
+            data={
+                "approved": False,
+                "verdict": "REQUEST_CHANGES",
+                "concerns": concerns,
+                "suggestions": suggestions,
+                "source": "verification",
+            },
+        )
+        review_state_file = self.run_dir / "review.state.json"
+        with open(review_state_file, "w") as f:
+            json.dump(self.agent_states["review"].to_dict(), f, indent=2)
+
+        self.state.agents_completed.append("verification:failed")
+        return "revise"
+
     def _get_git_diff(self) -> str:
         """Get current git diff."""
         try:
             result = subprocess.run(
                 ["git", "diff", "HEAD"],
-                cwd=self.config.project_dir,
+                cwd=self.config.work_dir,
                 capture_output=True,
                 text=True,
             )
@@ -340,7 +456,7 @@ class Pipeline:
                 # Try diff against base branch
                 result = subprocess.run(
                     ["git", "diff", f"origin/{self.config.base_branch}"],
-                    cwd=self.config.project_dir,
+                    cwd=self.config.work_dir,
                     capture_output=True,
                     text=True,
                 )

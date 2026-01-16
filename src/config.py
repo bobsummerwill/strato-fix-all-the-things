@@ -12,9 +12,13 @@ class Config:
     github_token: str
     github_repo: str
     project_dir: Path
+    work_dir: Path
     base_branch: str
     script_dir: Path
+    prompts_dir: Path
     runs_dir: Path
+    tool_clone_dir: Path
+    test_command: str | None = None
 
     # Timeouts (seconds)
     triage_timeout: int = 180
@@ -33,6 +37,7 @@ class Config:
             load_dotenv(env_file)
 
         script_dir = Path(__file__).parent.parent.resolve()
+        prompts_dir = script_dir / "prompts"
 
         github_token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
         if not github_token:
@@ -40,14 +45,20 @@ class Config:
 
         github_repo = os.environ.get("GITHUB_REPO", "blockapps/strato-platform")
         project_dir = Path(os.environ.get("PROJECT_DIR", script_dir.parent / "strato-platform"))
+        tool_clone_dir = Path(os.environ.get("TOOL_CLONE_DIR", script_dir / ".tool-clone"))
         base_branch = os.environ.get("BASE_BRANCH", "develop")
         runs_dir = script_dir / "runs"
+        test_command = os.environ.get("TEST_COMMAND")
 
         return cls(
             github_token=github_token,
             github_repo=github_repo,
             project_dir=project_dir,
+            work_dir=tool_clone_dir,
             base_branch=base_branch,
             script_dir=script_dir,
+            prompts_dir=prompts_dir,
             runs_dir=runs_dir,
+            tool_clone_dir=tool_clone_dir,
+            test_command=test_command,
         )

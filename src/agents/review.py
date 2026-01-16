@@ -48,7 +48,7 @@ Full fix details:
         try:
             result = run_claude(
                 prompt=prompt,
-                cwd=self.context.config.project_dir,
+                cwd=self.context.config.work_dir,
                 timeout_sec=self.context.config.review_timeout,
                 log_file=self.log_file,
             )
@@ -65,14 +65,8 @@ Full fix details:
         data = extract_json_from_output(result.output, "verdict")
 
         if not data:
-            self.warning("Could not extract structured result, defaulting to NEEDS_REVIEW")
-            data = {
-                "approved": False,
-                "confidence": 0.5,
-                "verdict": "NEEDS_REVIEW",
-                "concerns": ["Could not parse review output"],
-                "suggestions": [],
-            }
+            self.error("Could not extract structured result")
+            return AgentStatus.FAILED, {"error": "Review output missing required JSON"}
 
         approved = data.get("approved", False)
         verdict = data.get("verdict", "UNKNOWN")

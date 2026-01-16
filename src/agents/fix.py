@@ -52,7 +52,7 @@ Full research:
         try:
             result = run_claude(
                 prompt=prompt,
-                cwd=self.context.config.project_dir,
+                cwd=self.context.config.work_dir,
                 timeout_sec=self.context.config.fix_timeout,
                 log_file=self.log_file,
             )
@@ -73,13 +73,8 @@ Full research:
             data = extract_json_from_output(result.output, "files_changed")
 
         if not data:
-            self.warning("Could not extract structured result")
-            data = {
-                "confidence": 0.5,
-                "files_changed": [],
-                "summary": "Fix completed but no structured output",
-                "tests_added": [],
-            }
+            self.error("Could not extract structured result")
+            return AgentStatus.FAILED, {"error": "Fix output missing required JSON"}
 
         # Handle confidence as either dict or float
         conf_data = data.get("confidence", 0.5)

@@ -15,6 +15,7 @@ Environment:
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -26,11 +27,38 @@ from src.models import PipelineStatus
 from src.pipeline import Pipeline
 
 
+def ensure_tool_clone(config: Config) -> Path:
+    """Ensure a reusable tool clone exists for running fixes."""
+    tool_dir = config.tool_clone_dir
+    git_dir = tool_dir / ".git"
+    if tool_dir.exists():
+        if not git_dir.exists():
+            raise RuntimeError(f"Tool clone dir exists but is not a git repo: {tool_dir}")
+        return tool_dir
+
+    source_dir = config.project_dir
+    if source_dir.exists() and (source_dir / ".git").exists():
+        cmd = ["git", "clone", "--shared", str(source_dir), str(tool_dir)]
+    else:
+        repo_url = f"https://github.com/{config.github_repo}.git"
+        cmd = ["git", "clone", repo_url, str(tool_dir)]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to create tool clone: {result.stderr.strip()}")
+
+    return tool_dir
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Auto-fix GitHub issues using AI agents")
     parser.add_argument("issues", nargs="+", type=int, help="Issue numbers to process")
     parser.add_argument("--env", type=Path, help="Path to .env file")
+    parser.add_argument(
+        "--test-command",
+        help="Command to run for verification tests (overrides TEST_COMMAND)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -46,13 +74,24 @@ def main() -> int:
     print("=" * 50)
     print("  STRATO Fix All The Things - Multi-Agent Pipeline")
     print("=" * 50)
+    if args.test_command:
+        config.test_command = args.test_command
+
+    try:
+        work_dir = ensure_tool_clone(config)
+    except RuntimeError as e:
+        print(f"[ERROR] {e}")
+        return 1
+    config.work_dir = work_dir
+
     print(f"[INFO] Repository: {config.github_repo}")
     print(f"[INFO] Project: {config.project_dir}")
+    print(f"[INFO] Work repo: {config.work_dir}")
     print(f"[INFO] Issues to process: {len(args.issues)}")
 
     # Initialize clients
     github = GitHubClient(config.github_repo)
-    git = GitOps(config.project_dir)
+    git = GitOps(config.work_dir)
 
     # Ensure runs directory exists
     config.runs_dir.mkdir(exist_ok=True)
@@ -99,7 +138,11 @@ def main() -> int:
 
 
 def cleanup_git_state(git: GitOps, base_branch: str, feature_branch: str) -> None:
-    """Clean up git state - discard changes and return to base branch."""
+    """Clean up git state - discard changes and return to base branch.
+
+    Always performs destructive cleanup since we're working in a tool-managed
+    clone, not the developer's actual repository.
+    """
     try:
         # Discard any uncommitted changes
         git._run("checkout", "--", ".", check=False)
@@ -112,8 +155,34 @@ def cleanup_git_state(git: GitOps, base_branch: str, feature_branch: str) -> Non
         pass  # Best effort cleanup
 
 
-def process_issue(config: Config, github: GitHubClient, git: GitOps, issue_num: int) -> PipelineStatus:
-    """Process a single issue through the pipeline."""
+def record_run_metrics(config: Config, state, run_dir: Path) -> None:
+    """Append run metrics for benchmarking."""
+    metrics_file = config.runs_dir / "metrics.jsonl"
+    entry = {
+        "issue_number": state.issue_number,
+        "status": state.status.value,
+        "aggregate_confidence": state.aggregate_confidence,
+        "confidence_breakdown": state.confidence_breakdown,
+        "duration_seconds": state.to_dict().get("duration_seconds"),
+        "agents_completed": state.agents_completed,
+        "run_dir": str(run_dir),
+        "completed_at": state.completed_at.isoformat() if state.completed_at else None,
+    }
+    with open(metrics_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def process_issue(
+    config: Config,
+    github: GitHubClient,
+    git: GitOps,
+    issue_num: int,
+) -> PipelineStatus:
+    """Process a single issue through the pipeline.
+
+    Always performs destructive git operations since we're working in a
+    tool-managed clone, not the developer's actual repository.
+    """
     # Fetch issue details
     print(f"[INFO] Fetching issue #{issue_num}...")
     try:
@@ -145,17 +214,17 @@ def process_issue(config: Config, github: GitHubClient, git: GitOps, issue_num: 
     print(f"[INFO] Preparing git branch...")
 
     try:
-        # Ensure clean state before starting
+        # Ensure clean state before starting (always clean since it's a tool clone)
         if git.is_dirty():
-            print("[ERROR] Working tree has uncommitted changes. Please commit or stash them.")
-            return PipelineStatus.FAILED
+            git._run("checkout", "--", ".", check=False)
+            git._run("clean", "-fd", check=False)
 
         # Fetch latest and hard reset to ensure we're at latest base branch
         print(f"[INFO] Fetching latest from origin...")
         git.fetch("origin")
 
         # Force checkout to base branch (in case we're on a different branch)
-        git._run("checkout", "-f", config.base_branch, check=True)
+        git._run("checkout", config.base_branch, check=True)
 
         # Hard reset to match remote exactly (discards any local commits)
         git.reset_hard(f"origin/{config.base_branch}")
@@ -167,8 +236,9 @@ def process_issue(config: Config, github: GitHubClient, git: GitOps, issue_num: 
             print(f"[WARNING] Closing existing PR #{existing_pr.number}...")
             github.close_pr(existing_pr.number)
 
-        # Delete existing branch
-        git.delete_branch(branch_name, force=True)
+        # Delete existing branch (local and remote)
+        if git.branch_exists(branch_name):
+            git.delete_branch(branch_name, force=True)
         git.delete_remote_branch(branch_name)
 
         # Create new branch
@@ -184,6 +254,7 @@ def process_issue(config: Config, github: GitHubClient, git: GitOps, issue_num: 
         print(f"[INFO] Starting multi-agent pipeline...")
         pipeline = Pipeline(config, issue, run_dir)
         state = pipeline.run()
+        record_run_metrics(config, state, run_dir)
 
         # Handle results
         if state.status == PipelineStatus.SUCCESS:
@@ -192,7 +263,15 @@ def process_issue(config: Config, github: GitHubClient, git: GitOps, issue_num: 
             cleanup_git_state(git, config.base_branch, branch_name)
             return handle_skip(github, issue, state, run_dir)
         else:
-            return handle_failure(github, git, issue, branch_name, state, config.base_branch, run_dir)
+            return handle_failure(
+                github,
+                git,
+                issue,
+                branch_name,
+                state,
+                config.base_branch,
+                run_dir,
+            )
     except Exception as e:
         # Unexpected error - clean up and re-raise
         print(f"[ERROR] Unexpected error: {e}")
@@ -288,6 +367,15 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
             github.add_issue_comment(
                 issue.number,
                 f"Pipeline completed but no code changes were made.\n\n"
+                f"Aggregate confidence: {state.aggregate_confidence}"
+            )
+            return PipelineStatus.SKIPPED
+        diff_files = git._run("diff", "--name-only", f"origin/{config.base_branch}", check=False)
+        if not diff_files.strip():
+            print("[WARNING] No diff against base branch")
+            github.add_issue_comment(
+                issue.number,
+                f"Pipeline completed but no code changes were detected against base branch.\n\n"
                 f"Aggregate confidence: {state.aggregate_confidence}"
             )
             return PipelineStatus.SKIPPED
@@ -501,7 +589,15 @@ def handle_skip(github: GitHubClient, issue, state, run_dir: Path) -> PipelineSt
     return PipelineStatus.SKIPPED
 
 
-def handle_failure(github: GitHubClient, git: GitOps, issue, branch_name: str, state, base_branch: str, run_dir: Path) -> PipelineStatus:
+def handle_failure(
+    github: GitHubClient,
+    git: GitOps,
+    issue,
+    branch_name: str,
+    state,
+    base_branch: str,
+    run_dir: Path,
+) -> PipelineStatus:
     """Handle failed or blocked pipeline."""
     print(f"[ERROR] Pipeline failed: {state.failure_reason}")
     cleanup_git_state(git, base_branch, branch_name)

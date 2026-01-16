@@ -77,7 +77,7 @@ class Agent(ABC):
 
     def load_prompt_template(self) -> str:
         """Load and render the prompt template."""
-        template_file = self.context.config.script_dir / "prompts" / f"{self.name}.md"
+        template_file = self.context.config.prompts_dir / f"{self.name}.md"
         if not template_file.exists():
             raise FileNotFoundError(f"Prompt template not found: {template_file}")
 

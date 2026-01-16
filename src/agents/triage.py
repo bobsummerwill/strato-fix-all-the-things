@@ -25,7 +25,7 @@ class TriageAgent(Agent):
         try:
             result = run_claude(
                 prompt=prompt,
-                cwd=self.context.config.project_dir,
+                cwd=self.context.config.work_dir,
                 timeout_sec=self.context.config.triage_timeout,
                 log_file=self.log_file,
             )
@@ -42,26 +42,16 @@ class TriageAgent(Agent):
         data = extract_json_from_output(result.output, "classification")
 
         if not data:
-            self.warning("Could not extract structured result, defaulting to NEEDS_CLARIFICATION")
-            data = {
-                "classification": Classification.NEEDS_CLARIFICATION.value,
-                "confidence": 0.3,
-                "clarity_score": 0.3,
-                "feasibility_score": 0.3,
-                "summary": "Could not parse issue automatically",
-                "reasoning": "Triage agent failed to produce structured output",
-                "risks": ["Unknown issue structure"],
-                "suggested_approach": "Manual review required",
-                "questions_if_unclear": ["What is the expected behavior?"],
-                "estimated_complexity": "unknown",
-            }
+            self.error("Could not extract structured result")
+            return AgentStatus.FAILED, {"error": "Triage output missing required JSON"}
 
         # Parse and validate classification
         classification_str = data.get("classification", "NEEDS_CLARIFICATION")
         try:
             classification = Classification(classification_str)
         except ValueError:
-            classification = Classification.NEEDS_CLARIFICATION
+            self.error(f"Invalid classification: {classification_str}")
+            return AgentStatus.FAILED, {"error": f"Invalid classification: {classification_str}"}
 
         confidence = float(data.get("confidence", 0.5))
         summary = data.get("summary", "No summary")

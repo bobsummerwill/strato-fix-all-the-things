@@ -47,7 +47,7 @@ Full analysis:
         try:
             result = run_claude(
                 prompt=prompt,
-                cwd=self.context.config.project_dir,
+                cwd=self.context.config.work_dir,
                 timeout_sec=self.context.config.research_timeout,
                 log_file=self.log_file,
             )
@@ -64,15 +64,8 @@ Full analysis:
         data = extract_json_from_output(result.output, "confidence")
 
         if not data:
-            self.warning("Could not extract structured result")
-            data = {
-                "confidence": 0.3,
-                "files_analyzed": [],
-                "root_cause": "Could not determine",
-                "proposed_fix": "Manual analysis required",
-                "affected_areas": [],
-                "test_strategy": "Unknown",
-            }
+            self.error("Could not extract structured result")
+            return AgentStatus.FAILED, {"error": "Research output missing required JSON"}
 
         confidence = float(data.get("confidence", 0.5))
         files_analyzed = data.get("files_analyzed", [])

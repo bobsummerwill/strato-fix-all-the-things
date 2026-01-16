@@ -90,7 +90,6 @@ npm install -g @anthropic-ai/claude-code
 ```bash
 ./run.py 5960              # Single issue
 ./run.py 5960 5961 5962    # Multiple issues
-./run.py 5960 --test-command "make test"  # Run verification tests
 ```
 
 ## Configuration
@@ -103,7 +102,6 @@ Environment variables in `.env`:
 | `PROJECT_DIR` | Path to local repo clone | Required |
 | `TOOL_CLONE_DIR` | Path to tool-managed clone | `.tool-clone` |
 | `BASE_BRANCH` | Base branch for PRs | `develop` |
-| `TEST_COMMAND` | Command to run for verification tests | (unset) |
 | `TRIAGE_TIMEOUT` | Triage agent timeout (seconds) | `120` |
 | `RESEARCH_TIMEOUT` | Research agent timeout (seconds) | `300` |
 | `FIX_TIMEOUT` | Fix agent timeout (seconds) | `300` |

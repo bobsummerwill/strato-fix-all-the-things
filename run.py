@@ -55,10 +55,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Auto-fix GitHub issues using AI agents")
     parser.add_argument("issues", nargs="+", type=int, help="Issue numbers to process")
     parser.add_argument("--env", type=Path, help="Path to .env file")
-    parser.add_argument(
-        "--test-command",
-        help="Command to run for verification tests (overrides TEST_COMMAND)",
-    )
     args = parser.parse_args()
 
     # Load configuration
@@ -74,9 +70,6 @@ def main() -> int:
     print("=" * 50)
     print("  STRATO Fix All The Things - Multi-Agent Pipeline")
     print("=" * 50)
-    if args.test_command:
-        config.test_command = args.test_command
-
     try:
         work_dir = ensure_tool_clone(config)
     except RuntimeError as e:

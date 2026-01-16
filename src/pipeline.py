@@ -387,22 +387,6 @@ class Pipeline:
                     f"Reported files not found in git diff: {', '.join(missing[:5])}"
                 )
 
-        test_command = self.config.test_command
-        if test_command:
-            log_file = self.run_dir / f"verification-iteration-{self.fix_iteration}.log"
-            self.log(f"Running verification tests: {test_command}")
-            result = subprocess.run(
-                test_command,
-                cwd=self.config.work_dir,
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-            log_file.write_text(result.stdout + "\n" + result.stderr)
-            if result.returncode != 0:
-                concerns.append(f"Test command failed with exit code {result.returncode}.")
-                suggestions.append("Address failing tests before requesting review.")
-
         if not concerns:
             return "continue"
 

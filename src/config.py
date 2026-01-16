@@ -18,7 +18,6 @@ class Config:
     prompts_dir: Path
     runs_dir: Path
     tool_clone_dir: Path
-    test_command: str | None = None
 
     # Timeouts (seconds)
     triage_timeout: int = 180
@@ -48,8 +47,6 @@ class Config:
         tool_clone_dir = Path(os.environ.get("TOOL_CLONE_DIR", script_dir / ".tool-clone"))
         base_branch = os.environ.get("BASE_BRANCH", "develop")
         runs_dir = script_dir / "runs"
-        test_command = os.environ.get("TEST_COMMAND")
-
         return cls(
             github_token=github_token,
             github_repo=github_repo,
@@ -60,5 +57,4 @@ class Config:
             prompts_dir=prompts_dir,
             runs_dir=runs_dir,
             tool_clone_dir=tool_clone_dir,
-            test_command=test_command,
         )

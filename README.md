@@ -103,10 +103,13 @@ Environment variables in `.env`:
 | `TOOL_CLONE_DIR` | Path to tool-managed clone | `.tool-clone` |
 | `BASE_BRANCH` | Base branch for PRs | `develop` |
 | `STRATO_LOCK_TIMEOUT_SEC` | Max seconds to wait for the shared clone lock (0 = wait forever) | `0` |
-| `TRIAGE_TIMEOUT` | Triage agent timeout (seconds) | `120` |
-| `RESEARCH_TIMEOUT` | Research agent timeout (seconds) | `300` |
-| `FIX_TIMEOUT` | Fix agent timeout (seconds) | `300` |
-| `REVIEW_TIMEOUT` | Review agent timeout (seconds) | `180` |
+| `TRIAGE_TIMEOUT` | Triage agent timeout (seconds, max 3600) | `180` |
+| `RESEARCH_TIMEOUT` | Research agent timeout (seconds, max 3600) | `300` |
+| `FIX_TIMEOUT` | Fix agent timeout (seconds, max 3600) | `600` |
+| `REVIEW_TIMEOUT` | Review agent timeout (seconds, max 3600) | `300` |
+| `MIN_TRIAGE_CONFIDENCE` | Minimum triage confidence (0.0-1.0) | `0.6` |
+| `MIN_RESEARCH_CONFIDENCE` | Minimum research confidence (0.0-1.0) | `0.4` |
+| `MAX_FIX_REVIEW_ITERATIONS` | Max fix-review loop iterations | `3` |
 
 ## Run Output
 

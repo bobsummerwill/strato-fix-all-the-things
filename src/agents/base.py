@@ -9,6 +9,7 @@ from typing import Any
 
 from ..config import Config
 from ..models import AgentState, AgentStatus, Issue
+from ..sanitize import sanitize_for_prompt, sanitize_labels
 
 
 @dataclass
@@ -76,20 +77,25 @@ class Agent(ABC):
             json.dump(self.state.to_dict(), f, indent=2)
 
     def load_prompt_template(self) -> str:
-        """Load and render the prompt template."""
+        """Load and render the prompt template.
+
+        User-provided content (issue title, body, labels) is sanitized
+        to prevent prompt injection attacks.
+        """
         template_file = self.context.config.prompts_dir / f"{self.name}.md"
         if not template_file.exists():
             raise FileNotFoundError(f"Prompt template not found: {template_file}")
 
         template = template_file.read_text()
 
-        # Substitute variables
+        # Substitute variables with sanitized user content
         issue = self.context.issue
+        sanitized_labels = sanitize_labels(issue.labels)
         substitutions = {
             "${ISSUE_NUMBER}": str(issue.number),
-            "${ISSUE_TITLE}": issue.title,
-            "${ISSUE_BODY}": issue.body,
-            "${ISSUE_LABELS}": ", ".join(issue.labels),
+            "${ISSUE_TITLE}": sanitize_for_prompt(issue.title, max_length=500),
+            "${ISSUE_BODY}": sanitize_for_prompt(issue.body, max_length=50000),
+            "${ISSUE_LABELS}": ", ".join(sanitized_labels),
         }
 
         for key, value in substitutions.items():

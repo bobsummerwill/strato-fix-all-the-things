@@ -109,6 +109,7 @@ def run_claude(
 
 
 def _contains_required_field(value: Any, required_field: str) -> bool:
+    """Check if a JSON value contains the required field at any nesting level."""
     if isinstance(value, dict):
         if required_field in value:
             return True
@@ -118,20 +119,92 @@ def _contains_required_field(value: Any, required_field: str) -> bool:
     return False
 
 
-def _scan_for_json(text: str, required_field: str, max_len: int = 100000) -> dict[str, Any] | None:
-    decoder = json.JSONDecoder()
-    text_len = len(text)
-    for idx, ch in enumerate(text):
-        if ch not in "{[":
-            continue
-        end_limit = min(text_len, idx + max_len)
-        snippet = text[idx:end_limit]
-        try:
-            obj, _ = decoder.raw_decode(snippet)
-        except json.JSONDecodeError:
-            continue
-        if _contains_required_field(obj, required_field):
+def _extract_json_blocks(text: str) -> list[str]:
+    """Extract content from ```json ... ``` blocks.
+
+    Uses a simple state machine to handle nested code blocks properly.
+    Returns list of JSON strings (content between the markers).
+    """
+    blocks = []
+    i = 0
+    while i < len(text):
+        # Look for ```json marker
+        start_marker = text.find("```json", i)
+        if start_marker == -1:
+            break
+
+        # Find the end of the opening marker line
+        content_start = text.find("\n", start_marker)
+        if content_start == -1:
+            break
+        content_start += 1
+
+        # Find the closing ``` - but be careful of nested code blocks
+        # We look for ``` at the start of a line (or after whitespace)
+        search_pos = content_start
+        while search_pos < len(text):
+            close_marker = text.find("```", search_pos)
+            if close_marker == -1:
+                # No closing marker found, take rest of text
+                blocks.append(text[content_start:].strip())
+                i = len(text)
+                break
+
+            # Check if this is a closing marker (not opening another block)
+            # A closing marker should not be followed by a language identifier
+            after_close = close_marker + 3
+            if after_close >= len(text) or text[after_close] in ("\n", " ", "\t", "\r"):
+                # This is a closing marker
+                blocks.append(text[content_start:close_marker].strip())
+                i = after_close
+                break
+            else:
+                # This opens another code block, skip past it
+                search_pos = after_close
+        else:
+            break
+
+    return blocks
+
+
+def _try_parse_json(text: str, required_field: str) -> dict[str, Any] | None:
+    """Try to parse text as JSON and verify it contains the required field."""
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and _contains_required_field(obj, required_field):
             return obj
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
+def _find_json_objects(text: str, required_field: str) -> dict[str, Any] | None:
+    """Find JSON objects in text using incremental parsing.
+
+    More efficient than O(n²) scanning - uses the JSON decoder's ability
+    to report where parsing stopped.
+    """
+    decoder = json.JSONDecoder()
+
+    # Find all positions where a JSON object might start
+    i = 0
+    while i < len(text):
+        # Skip to next potential JSON start
+        while i < len(text) and text[i] not in "{[":
+            i += 1
+        if i >= len(text):
+            break
+
+        try:
+            obj, end_idx = decoder.raw_decode(text, i)
+            if isinstance(obj, dict) and _contains_required_field(obj, required_field):
+                return obj
+            # Move past this object to find others
+            i += end_idx
+        except json.JSONDecodeError:
+            # Not valid JSON at this position, move to next character
+            i += 1
+
     return None
 
 
@@ -139,6 +212,10 @@ def extract_json_from_output(output: str, required_field: str = "classification"
     """Extract JSON from Claude's stream-json output.
 
     Parses stream-json lines to find assistant message text containing JSON blocks.
+    Strategy:
+    1. Parse stream-json format and extract text content
+    2. Look for ```json ... ``` blocks in text content
+    3. Fall back to finding raw JSON objects in text
     """
     # First, try to properly parse stream-json lines and extract text content
     text_contents = []
@@ -154,34 +231,29 @@ def extract_json_from_output(output: str, required_field: str = "classification"
         except json.JSONDecodeError:
             continue
 
-    # Search through all text content for JSON blocks
-    for text in reversed(text_contents):  # Most recent first
-        # Find ```json ... ``` blocks (greedy to handle nested braces)
-        matches = re.findall(r"```json\s*(\{.+\})\s*```", text, re.DOTALL)
-        for match in reversed(matches):
-            try:
-                obj = json.loads(match)
-                if _contains_required_field(obj, required_field):
-                    return obj
-            except json.JSONDecodeError:
-                continue
+    # Search through all text content for JSON blocks (most recent first)
+    for text in reversed(text_contents):
+        # Extract ```json ... ``` blocks
+        json_blocks = _extract_json_blocks(text)
+        for block in reversed(json_blocks):
+            result = _try_parse_json(block, required_field)
+            if result:
+                return result
 
-    # Fallback: try naive text extraction for non-stream-json output
-    text = output.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+        # Try finding raw JSON objects in the text
+        result = _find_json_objects(text, required_field)
+        if result:
+            return result
 
-    # Find ```json ... ``` blocks
-    matches = re.findall(r"```json\s*(\{.+\})\s*```", text, re.DOTALL)
-    for match in reversed(matches):
-        try:
-            obj = json.loads(match)
-            if _contains_required_field(obj, required_field):
-                return obj
-        except json.JSONDecodeError:
-            continue
+    # Fallback: try on raw output (for non-stream-json format)
+    # Unescape common escape sequences
+    raw_text = output.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
 
-    # Last fallback: look for raw JSON with required field
-    obj = _scan_for_json(text, required_field)
-    if obj:
-        return obj
+    json_blocks = _extract_json_blocks(raw_text)
+    for block in reversed(json_blocks):
+        result = _try_parse_json(block, required_field)
+        if result:
+            return result
 
-    return None
+    # Last resort: scan raw output for JSON objects
+    return _find_json_objects(raw_text, required_field)

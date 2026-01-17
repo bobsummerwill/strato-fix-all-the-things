@@ -14,9 +14,6 @@ from .agents.review import ReviewAgent
 from .config import Config
 from .models import AgentState, AgentStatus, Issue, PipelineState, PipelineStatus
 
-# Maximum fix-review iterations before giving up
-MAX_FIX_REVIEW_ITERATIONS = 3
-
 
 class Pipeline:
     """Orchestrates the multi-agent pipeline."""
@@ -62,10 +59,10 @@ class Pipeline:
                 return self._finalize()
 
         # Run fix-review loop
-        while self.fix_iteration < MAX_FIX_REVIEW_ITERATIONS:
+        while self.fix_iteration < self.config.max_fix_review_iterations:
             self.fix_iteration += 1
             self.log("=" * 40)
-            self.log(f"  FIX-REVIEW ITERATION {self.fix_iteration}/{MAX_FIX_REVIEW_ITERATIONS}")
+            self.log(f"  FIX-REVIEW ITERATION {self.fix_iteration}/{self.config.max_fix_review_iterations}")
             self.log("=" * 40)
 
             # Run fix agent (or revision if not first iteration)
@@ -73,16 +70,28 @@ class Pipeline:
             if result == "stop":
                 return self._finalize()
 
-            # Verify changes and tests before review
+            # Verify changes exist before review (precondition check)
             verify_result = self._verify_fix()
             if verify_result == "revise":
-                if self.fix_iteration < MAX_FIX_REVIEW_ITERATIONS:
-                    self.log("[INFO] Verification requested changes, attempting revision...")
+                if self.fix_iteration < self.config.max_fix_review_iterations:
+                    self.log("[INFO] No changes detected, attempting revision...")
+                    # Create minimal review state for revision prompt
+                    self.agent_states["review"] = AgentState(
+                        agent="review",
+                        status=AgentStatus.SKIPPED,
+                        issue_number=self.issue.number,
+                        confidence=0.0,
+                        data={
+                            "verdict": "REQUEST_CHANGES",
+                            "concerns": ["No files were changed by the fix attempt"],
+                            "suggestions": ["Ensure the fix applies actual code changes"],
+                        },
+                    )
                     continue
-                self.log("[ERROR] Verification failed but max iterations reached")
+                self.log("[ERROR] No changes detected after max iterations")
                 self.state.status = PipelineStatus.BLOCKED
                 self.state.failure_reason = (
-                    f"Verification still failing after {MAX_FIX_REVIEW_ITERATIONS} iterations"
+                    f"Fix produced no changes after {self.config.max_fix_review_iterations} iterations"
                 )
                 return self._finalize()
             elif verify_result == "stop":
@@ -98,12 +107,12 @@ class Pipeline:
                 return self._finalize()
             elif result == "revise":
                 # Review requested changes - loop again
-                if self.fix_iteration < MAX_FIX_REVIEW_ITERATIONS:
+                if self.fix_iteration < self.config.max_fix_review_iterations:
                     self.log(f"[INFO] Review requested changes, attempting revision...")
                 else:
                     self.log(f"[ERROR] Review requested changes but max iterations reached")
                     self.state.status = PipelineStatus.BLOCKED
-                    self.state.failure_reason = f"Review still requesting changes after {MAX_FIX_REVIEW_ITERATIONS} iterations"
+                    self.state.failure_reason = f"Review still requesting changes after {self.config.max_fix_review_iterations} iterations"
 
         # If we completed successfully
         if self.state.status == PipelineStatus.RUNNING:
@@ -252,7 +261,7 @@ class Pipeline:
         prompt = prompt.replace("${ISSUE_NUMBER}", str(self.issue.number))
         prompt = prompt.replace("${ISSUE_TITLE}", self.issue.title)
         prompt = prompt.replace("${ATTEMPT_NUMBER}", str(self.fix_iteration))
-        prompt = prompt.replace("${MAX_ATTEMPTS}", str(MAX_FIX_REVIEW_ITERATIONS))
+        prompt = prompt.replace("${MAX_ATTEMPTS}", str(self.config.max_fix_review_iterations))
         prompt = prompt.replace("${REVIEW_VERDICT}", review_state.data.get("verdict", "REQUEST_CHANGES"))
         prompt = prompt.replace("${REVIEW_CONFIDENCE}", str(review_state.confidence))
         prompt = prompt.replace("${REVIEW_CONCERNS}", concerns_str)
@@ -405,68 +414,49 @@ class Pipeline:
             return []
 
     def _verify_fix(self) -> str:
-        """Verify that changes exist and optional tests pass."""
-        concerns: list[str] = []
-        suggestions: list[str] = []
+        """Verify that changes exist before running review.
 
+        This is a precondition check - if there are no changes, we can't review anything.
+        Returns 'continue' to proceed to review, 'revise' to try fix again, or 'stop' to halt.
+        """
         changed_files = self._get_changed_files()
-        if not changed_files:
-            concerns.append("No git diff detected after fix; no files changed.")
-            suggestions.append("Ensure the fix applies actual code changes before responding.")
 
+        # Update fix state with actual changed files
         fix_state = self.agent_states.get("fix")
-        reported_files = fix_state.data.get("files_changed", []) if fix_state else []
-        if reported_files and changed_files:
-            missing = sorted(set(reported_files) - set(changed_files))
-            if missing:
-                concerns.append(
-                    f"Reported files not found in git diff: {', '.join(missing[:5])}"
-                )
         if fix_state and changed_files:
+            # Record verified files for later use
             fix_state.data["verified_files_changed"] = changed_files
             fix_state.data["files_changed"] = changed_files
             fix_state_file = self.run_dir / "fix.state.json"
             with open(fix_state_file, "w") as f:
                 json.dump(fix_state.to_dict(), f, indent=2)
 
-        if not concerns:
-            return "continue"
+        # Check if any changes were made
+        if not changed_files:
+            self.log("[WARNING] No files changed after fix - nothing to review")
 
-        verification_state = AgentState(
-            agent="verification",
-            status=AgentStatus.SKIPPED,
-            issue_number=self.issue.number,
-            confidence=0.0,
-            data={
-                "concerns": concerns,
-                "suggestions": suggestions,
-                "changed_files": changed_files,
-            },
-        )
-        self.agent_states["verification"] = verification_state
-        state_file = self.run_dir / "verification.state.json"
-        with open(state_file, "w") as f:
-            json.dump(verification_state.to_dict(), f, indent=2)
+            # Log reported vs actual mismatch
+            reported_files = fix_state.data.get("files_changed", []) if fix_state else []
+            if reported_files:
+                self.log(f"[WARNING] Fix agent reported changing: {reported_files}")
+                self.log("[WARNING] But git diff shows no changes")
 
-        self.agent_states["review"] = AgentState(
-            agent="review",
-            status=AgentStatus.SKIPPED,
-            issue_number=self.issue.number,
-            confidence=0.0,
-            data={
-                "approved": False,
-                "verdict": "REQUEST_CHANGES",
-                "concerns": concerns,
-                "suggestions": suggestions,
-                "source": "verification",
-            },
-        )
-        review_state_file = self.run_dir / "review.state.json"
-        with open(review_state_file, "w") as f:
-            json.dump(self.agent_states["review"].to_dict(), f, indent=2)
+            # No changes = nothing to review, request revision
+            return "revise"
 
-        self.state.agents_completed.append("verification:failed")
-        return "revise"
+        # Check for mismatch between reported and actual files (informational only)
+        if fix_state:
+            reported_files = fix_state.data.get("files_changed", [])
+            if reported_files:
+                missing = sorted(set(reported_files) - set(changed_files))
+                extra = sorted(set(changed_files) - set(reported_files))
+                if missing:
+                    self.log(f"[INFO] Files reported but not in diff: {missing[:5]}")
+                if extra:
+                    self.log(f"[INFO] Files in diff but not reported: {extra[:5]}")
+
+        self.log(f"[INFO] Verified {len(changed_files)} changed files")
+        return "continue"
 
     def _get_git_diff(self) -> str:
         """Get current git diff."""

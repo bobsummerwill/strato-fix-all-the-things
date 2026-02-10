@@ -13,6 +13,8 @@ from .agents.fix import FixAgent
 from .agents.review import ReviewAgent
 from .config import Config
 from .models import AgentState, AgentStatus, Issue, PipelineState, PipelineStatus
+from .claude_runner import extract_json_from_output
+from .llm_runner import LLMRunnerError, LLMRunnerTimeoutError, run_llm
 
 # Maximum fix-review iterations before giving up
 MAX_FIX_REVIEW_ITERATIONS = 3
@@ -31,6 +33,13 @@ class Pipeline:
         self.state = PipelineState(
             status=PipelineStatus.RUNNING,
             issue_number=issue.number,
+            provider_config={
+                "default": config.model_provider,
+                "triage": config.provider_for_stage("triage"),
+                "research": config.provider_for_stage("research"),
+                "fix": config.provider_for_stage("fix"),
+                "review": config.provider_for_stage("review"),
+            },
         )
         self.agent_states: dict[str, AgentState] = {}
         self.fix_iteration = 0
@@ -119,6 +128,13 @@ class Pipeline:
         agent = agent_cls(context)
         agent_state = agent.execute()
         self.agent_states[agent_cls.name] = agent_state
+        self.state.stage_metrics[agent_name] = {
+            "status": agent_state.status.value,
+            "confidence": agent_state.confidence,
+            "provider": agent_state.data.get("model_provider", ""),
+            "duration_ms": agent_state.data.get("runner_duration_ms", 0),
+            "cost_usd": agent_state.data.get("runner_cost_usd", 0.0),
+        }
 
         # Handle result
         if agent_state.status == AgentStatus.FAILED:
@@ -248,20 +264,25 @@ class Pipeline:
         prompt_path = self.run_dir / f"fix-revision-{self.fix_iteration}.prompt.md"
         prompt_path.write_text(prompt)
 
-        # Run Claude
-        from .claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
-
         log_file = self.run_dir / f"fix-revision-{self.fix_iteration}.log"
-        self.log(f"Running Claude for revision (timeout: {self.config.fix_timeout}s)...")
+        provider = self.config.provider_for_stage("fix")
+        self.log(f"Running {provider} for revision (timeout: {self.config.fix_timeout}s)...")
 
         try:
-            result = run_claude(
+            result = run_llm(
+                provider=provider,
                 prompt=prompt,
                 cwd=self.config.project_dir,
                 timeout_sec=self.config.fix_timeout,
                 log_file=log_file,
+                config=self.config,
             )
-        except ClaudeTimeoutError as e:
+        except LLMRunnerTimeoutError as e:
+            self.log(f"[ERROR] {e}")
+            self.state.status = PipelineStatus.FAILED
+            self.state.failure_reason = str(e)
+            return "stop"
+        except LLMRunnerError as e:
             self.log(f"[ERROR] {e}")
             self.state.status = PipelineStatus.FAILED
             self.state.failure_reason = str(e)
@@ -304,8 +325,18 @@ class Pipeline:
                 "concerns_addressed": data.get("concerns_addressed", []),
                 "suggestions_implemented": data.get("suggestions_implemented", []),
                 "full_result": data,
+                "model_provider": result.provider,
+                "runner_duration_ms": result.duration_ms,
+                "runner_cost_usd": result.cost_usd,
             },
         )
+        self.state.stage_metrics[f"fix-revision-{self.fix_iteration}"] = {
+            "status": self.agent_states["fix"].status.value,
+            "confidence": confidence,
+            "provider": result.provider,
+            "duration_ms": result.duration_ms,
+            "cost_usd": result.cost_usd,
+        }
 
         # Save state
         state_file = self.run_dir / f"fix-revision-{self.fix_iteration}.state.json"

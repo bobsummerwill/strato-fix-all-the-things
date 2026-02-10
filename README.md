@@ -92,6 +92,12 @@ npm install -g @anthropic-ai/claude-code
 ./run.py 5960 5961 5962    # Multiple issues
 ```
 
+4. **Run from an issue comment invocation (optional):**
+```bash
+./run.py 6241 --issue-comment-id 123456789
+```
+This mode validates that the issue comment contains a supported `@` invocation, posts an acknowledgement comment, and then runs the normal pipeline for the issue.
+
 ## Configuration
 
 Environment variables in `.env`:
@@ -105,6 +111,13 @@ Environment variables in `.env`:
 | `RESEARCH_TIMEOUT` | Research agent timeout (seconds) | `300` |
 | `FIX_TIMEOUT` | Fix agent timeout (seconds) | `300` |
 | `REVIEW_TIMEOUT` | Review agent timeout (seconds) | `180` |
+| `MODEL_PROVIDER` | Default LLM provider (`claude` or `codex`) | `claude` |
+| `TRIAGE_MODEL_PROVIDER` | Optional provider override for triage | unset |
+| `RESEARCH_MODEL_PROVIDER` | Optional provider override for research | unset |
+| `FIX_MODEL_PROVIDER` | Optional provider override for fix | unset |
+| `REVIEW_MODEL_PROVIDER` | Optional provider override for review | unset |
+| `CLAUDE_CLI_COMMAND` | Claude CLI executable | `claude` |
+| `CODEX_CLI_COMMAND` | Codex CLI executable | `codex` |
 
 ## Run Output
 
@@ -201,6 +214,18 @@ If any stage fails or blocks, the pipeline stops and comments on the issue expla
 - [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code) (`npm install -g @anthropic-ai/claude-code`)
 - [GitHub CLI](https://cli.github.com/) (`gh`) - authenticated
 - `git`
+
+## Roadmap
+
+- Phase 2 model-provider and benchmark work is tracked in `docs/model-benchmark-backlog.md`.
+
+## Benchmark Reporting
+
+Generate benchmark output from historical runs:
+
+```bash
+python3 scripts/benchmark_report.py --runs-dir runs --json-out runs/benchmark.json --csv-out runs/benchmark.csv
+```
 
 ## License
 

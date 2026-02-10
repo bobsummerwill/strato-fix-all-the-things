@@ -47,6 +47,11 @@ Thoroughly explore the codebase to answer these questions:
 - When was this likely introduced?
 - Are there related issues elsewhere?
 
+For wording/instruction issues:
+- Verify the true behavior in source code (ownership checks, access control, contract calls).
+- Identify all user-facing text that describes that behavior.
+- Prioritize canonical UI text locations over incidental comments.
+
 ### 4. DOCUMENT - Record key code snippets
 - Copy the exact code that needs to change
 - Copy related code that informs how changes should be made
@@ -57,6 +62,10 @@ Thoroughly explore the codebase to answer these questions:
 - In what order should changes be made?
 - What are the risks and edge cases?
 - What should be tested?
+
+For copy-only fixes:
+- Keep scope minimal (only incorrect strings and directly related labels/tooltips).
+- Recommend a quick manual UI smoke test to confirm wording and context are correct.
 
 ## Research Protocol
 

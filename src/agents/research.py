@@ -2,7 +2,8 @@
 
 from typing import Any
 
-from ..claude_runner import ClaudeTimeoutError, extract_json_from_output, run_claude
+from ..claude_runner import extract_json_from_output
+from ..llm_runner import LLMRunnerError, LLMRunnerTimeoutError
 from ..models import AgentStatus
 from .base import Agent
 
@@ -42,16 +43,13 @@ Full analysis:
         prompt = prompt.replace("${TRIAGE_SUMMARY}", triage_context)
         self.prompt_file.write_text(prompt)
 
-        # Run Claude
-        self.info(f"Running Claude (timeout: {self.context.config.research_timeout}s)...")
+        # Run configured provider
         try:
-            result = run_claude(
-                prompt=prompt,
-                cwd=self.context.config.project_dir,
-                timeout_sec=self.context.config.research_timeout,
-                log_file=self.log_file,
-            )
-        except ClaudeTimeoutError as e:
+            result = self.run_model(prompt, self.context.config.research_timeout)
+        except LLMRunnerTimeoutError as e:
+            self.error(str(e))
+            return AgentStatus.FAILED, {"error": str(e)}
+        except LLMRunnerError as e:
             self.error(str(e))
             return AgentStatus.FAILED, {"error": str(e)}
 

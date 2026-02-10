@@ -133,6 +133,8 @@ class PipelineState:
     completed_at: datetime | None = None
     aggregate_confidence: float = 0.0
     confidence_breakdown: dict[str, float] = field(default_factory=dict)
+    provider_config: dict[str, str] = field(default_factory=dict)
+    stage_metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -149,4 +151,6 @@ class PipelineState:
             ).total_seconds(),
             "aggregate_confidence": self.aggregate_confidence,
             "confidence_breakdown": self.confidence_breakdown,
+            "provider_config": self.provider_config,
+            "stage_metrics": self.stage_metrics,
         }

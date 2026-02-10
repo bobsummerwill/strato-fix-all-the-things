@@ -33,10 +33,11 @@ def run_claude(
     cwd: Path,
     timeout_sec: int = 600,
     log_file: Path | None = None,
+    cli_command: str = "claude",
 ) -> ClaudeResult:
     """Run Claude CLI with a prompt and return the result."""
     cmd = [
-        "claude",
+        cli_command,
         "--dangerously-skip-permissions",
         "--verbose",
         "--output-format", "stream-json",

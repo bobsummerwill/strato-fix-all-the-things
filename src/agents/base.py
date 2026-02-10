@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from ..llm_runner import LLMRunnerResult, run_llm
 from ..models import AgentState, AgentStatus, Issue
 
 
@@ -27,6 +28,7 @@ class Agent(ABC):
 
     def __init__(self, context: AgentContext):
         self.context = context
+        self._last_runner_result: LLMRunnerResult | None = None
         self.state = AgentState(
             agent=self.name,
             status=AgentStatus.PENDING,
@@ -97,6 +99,21 @@ class Agent(ABC):
 
         return template
 
+    def run_model(self, prompt: str, timeout_sec: int) -> LLMRunnerResult:
+        """Execute current stage using configured model provider."""
+        provider = self.context.config.provider_for_stage(self.name)
+        self.info(f"Running {provider} (timeout: {timeout_sec}s)...")
+        result = run_llm(
+            provider=provider,
+            prompt=prompt,
+            cwd=self.context.config.project_dir,
+            timeout_sec=timeout_sec,
+            log_file=self.log_file,
+            config=self.context.config,
+        )
+        self._last_runner_result = result
+        return result
+
     @abstractmethod
     def run(self) -> tuple[AgentStatus, dict[str, Any]]:
         """Execute the agent's task.
@@ -116,6 +133,10 @@ class Agent(ABC):
             self.state.status = status
             self.state.data = data
             self.state.confidence = data.get("confidence", 0.0)
+            if self._last_runner_result:
+                self.state.data["model_provider"] = self._last_runner_result.provider
+                self.state.data["runner_duration_ms"] = self._last_runner_result.duration_ms
+                self.state.data["runner_cost_usd"] = self._last_runner_result.cost_usd
 
             if status == AgentStatus.SUCCESS:
                 self.success(f"{self.name.title()} completed successfully")

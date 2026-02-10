@@ -20,6 +20,16 @@ class PullRequest:
     head_branch: str
 
 
+@dataclass
+class IssueComment:
+    """Issue comment data."""
+    id: int
+    body: str
+    author: str
+    issue_number: int
+    issue_url: str
+
+
 class GitHubClient:
     """GitHub client using gh CLI."""
 
@@ -47,6 +57,31 @@ class GitHubClient:
             body=data["body"] or "",
             labels=[label["name"] for label in data.get("labels", [])],
             url=data.get("url", ""),
+        )
+
+    def get_issue_comment(self, comment_id: int) -> IssueComment:
+        """Fetch issue comment details by comment id."""
+        owner, repo_name = self.repo.split("/", maxsplit=1)
+        output = self._run_gh(
+            "api",
+            f"repos/{owner}/{repo_name}/issues/comments/{comment_id}",
+        )
+        data = json.loads(output)
+
+        issue_url = data.get("issue_url", "")
+        issue_number = 0
+        if issue_url:
+            try:
+                issue_number = int(issue_url.rstrip("/").split("/")[-1])
+            except (ValueError, IndexError):
+                issue_number = 0
+
+        return IssueComment(
+            id=int(data["id"]),
+            body=data.get("body", "") or "",
+            author=(data.get("user") or {}).get("login", ""),
+            issue_number=issue_number,
+            issue_url=issue_url,
         )
 
     def add_issue_comment(self, issue_number: int, body: str) -> None:

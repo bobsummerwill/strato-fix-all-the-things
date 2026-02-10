@@ -23,6 +23,8 @@ Analyze this issue and classify it into ONE of these categories:
 2. **FIXABLE_CONFIG** - Can be fixed with configuration/environment changes
    - Environment variables, feature flags, settings files
 
+Note: UI text, documentation strings, and in-app instruction copy count as code changes when the expected behavior is clear (for example: permission guidance text is wrong and must match current authorization rules). Do not classify these as NEEDS_HUMAN unless product intent is unclear.
+
 3. **NEEDS_CLARIFICATION** - Issue is too vague or ambiguous
    - Missing reproduction steps
    - Unclear what the expected behavior should be
@@ -52,6 +54,13 @@ Apply this reasoning:
 3. **ASSESS FEASIBILITY**: Can AI fix this without human input? (0.0-1.0)
 4. **IDENTIFY RISKS**: What could go wrong?
 5. **DECIDE**: Which category and why?
+
+## Special Handling: Docs/UI Instruction Mismatches
+
+When an issue reports that instructions/help text are incorrect:
+- Treat it as `FIXABLE_CODE` when the corrected wording is explicit or directly inferable from current behavior/contracts.
+- Prefer small, targeted changes in UI/docs over broad refactors.
+- Include a risk about semantic correctness (wording must match current rules).
 
 ## Output Format
 
